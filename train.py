@@ -1,4 +1,3 @@
-#应用了分形噪声作为密钥
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -19,7 +18,6 @@ torch.cuda.manual_seed_all(random_seed)
 torch.backends.cudnn.deterministic=True
 torch.backends.cudnn.benchmark=False
 
-# 卷积版的 Invertible Block
 class InvertibleBlock(nn.Module):
     def __init__(self,channels):
         super().__init__()
@@ -59,7 +57,7 @@ class PSNRLoss(nn.Module):
     def forward(self,img1,img2):
         mse=torch.mean((img1 - img2) ** 2)
         if mse == 0:
-            return float('inf')  # 或者返回一个极大的值
+            return float('inf')
         return 20*torch.log10(img2.max()/torch.sqrt(mse))
 
 def train_model(model,lr,dataset,key,num_epochs=10,batch_size=64,A:list=[32,1,1,0,0],compress:bool=False,lossList:list=[],psnr_y1List:list=[],psnr_x2List:list=[]):
@@ -81,10 +79,10 @@ def train_model(model,lr,dataset,key,num_epochs=10,batch_size=64,A:list=[32,1,1,
         y1Loss=0.0
 
         for batch_idx,(x1,_) in enumerate(data_loader):
-            x1=x1.to(device)  # 将MNIST图像移动到相同设备
-            if x1.shape[0]<batch_size:#弃用小批次
+            x1=x1.to(device)
+            if x1.shape[0]<batch_size:
                 break
-            x2,_=next(iter(data_loader))#同样使用cifar10作为秘密
+            x2,_=next(iter(data_loader))
             x2=x2.to(device)
 
             y1,y2=model(x1,x2)
@@ -93,10 +91,10 @@ def train_model(model,lr,dataset,key,num_epochs=10,batch_size=64,A:list=[32,1,1,
             loss_y2=loss_fn_vgg(y2,target_y2)
 
             if compress:
-                #y1=JPEG(y1)#压缩加密图像
+                #y1=JPEG(y1)
                 y1=Blur(y1)
 
-            _,decoded_x2=model.inverse(y1,target_y2)#使用标准的常数矩阵求解出隐藏图像
+            _,decoded_x2=model.inverse(y1,target_y2)
             loss_x2=loss_fn_vgg(x2,decoded_x2)
             psnr_x2=compute_psnr(decoded_x2,x2)
 
@@ -135,61 +133,51 @@ def train_model(model,lr,dataset,key,num_epochs=10,batch_size=64,A:list=[32,1,1,
     return lossList,psnr_y1List,psnr_x2List
 
 def test_model(model,key,container=None,cover_image=None,compress:bool=False):
-    model.eval()  # 切换模型为评估模式
+    model.eval()
     compute_psnr=PSNRLoss()
     if container is None:
       dataset=datasets.CIFAR10(root='/data',train=True,transform=transform,download=True)
-      data_loader=DataLoader(dataset,batch_size=1,shuffle=False)  # 仅需要测试一个样本
-      x1,_=next(iter(data_loader))  # x1是载体原图
+      data_loader=DataLoader(dataset,batch_size=1,shuffle=False)
+      x1,_=next(iter(data_loader))
       x1=x1.to(device)
     else:
-      x1=container.unsqueeze(0).to(device)  # 将MNIST图像移到相同设备
-    x2=cover_image.unsqueeze(0).to(device)  # 隐写内容图（同样大小）
+      x1=container.unsqueeze(0).to(device)
+    x2=cover_image.unsqueeze(0).to(device)
     target_y2=key.repeat(1,1,1,1).to(device)
 
-    # 前向传播：编码隐写内容
     with torch.no_grad():
-        y1,y2=model(x1,x2)  # 隐写后的图和隐写内容
+        y1,y2=model(x1,x2)
 
-        # 解码：恢复隐写内容
         if compress:
-            decoded_x1,decoded_x2=model.inverse(JPEG(y1),target_y2)  # 解码后的图像
+            decoded_x1,decoded_x2=model.inverse(JPEG(y1),target_y2)
         else:
-            decoded_x1,decoded_x2=model.inverse(y1,target_y2)  # 解码后的图像
+            decoded_x1,decoded_x2=model.inverse(y1,target_y2)
 
-    # 计算隐写内容的差异
-    diff=torch.abs(decoded_x2 - x2).mean().item()  # 解码后隐写内容与原隐写内容的差异
+    diff=torch.abs(decoded_x2 - x2).mean().item()
+    fig,axs=plt.subplots(2,2,figsize=(4,4))
 
-    # 可视化结果
-    fig,axs=plt.subplots(1,4,figsize=(16,4))
+    axs[0][0].imshow(x1.squeeze().permute(1,2,0).cpu().numpy())
+    axs[0][0].set_title('Original Image (x1)')
+    axs[0][0].axis('off')
 
-    # 载体原图
-    axs[0].imshow(x1.squeeze().permute(1,2,0).cpu().numpy(),cmap='gray')
-    axs[0].set_title('Original Image (x1)')
-    axs[0].axis('off')
+    axs[0][1].imshow(x2.squeeze().permute(1,2,0).cpu().numpy())
+    axs[0][1].set_title('Stego Content (x2)')
+    axs[0][1].axis('off')
 
-    # 隐写内容
-    axs[1].imshow(x2.squeeze().permute(1,2,0).cpu().numpy(),cmap='gray')
-    axs[1].set_title('Stego Content (x2)')
-    axs[1].axis('off')
-
-    # 隐写后的图
     print(y1.min(),y1.max())
-    axs[2].imshow(y1.squeeze().permute(1,2,0).cpu().numpy(),cmap='gray')
-    axs[2].set_title('Stego Image (y1)')
-    axs[2].text(0,0,f'{compute_psnr(x1,y1):.2f}dB',va='bottom',ha='center')
-    axs[2].axis('off')
+    axs[1][0].imshow(y1.squeeze().permute(1,2,0).cpu().numpy())
+    axs[1][0].set_title('Stego Image (y1)')
+    axs[1][0].text(0,0,f'{compute_psnr(x1,y1):.2f}dB',va='bottom',ha='center')
+    axs[1][0].axis('off')
 
-    # 解码后的隐写内容
-    axs[3].imshow(decoded_x2.squeeze().permute(1,2,0).cpu().numpy(),cmap='gray')
-    axs[3].set_title('Decoded Stego Content')
-    axs[3].text(0,0,f'{compute_psnr(x2,decoded_x2):.2f}dB',va='bottom',ha='center')
-    axs[3].axis('off')
+    axs[1][1].imshow(decoded_x2.squeeze().permute(1,2,0).cpu().numpy())
+    axs[1][1].set_title('Decoded Stego Content')
+    axs[1][1].text(0,0,f'{compute_psnr(x2,decoded_x2):.2f}dB',va='bottom',ha='center')
+    axs[1][1].axis('off')
 
     plt.show()
 
-    return diff  # 返回解码隐写内容的差异
-
+    return diff
 def JPEG(im):
     """
     输入：PyTorch 张量 (batchSize,3,H,W)，表示一批图片
@@ -231,10 +219,8 @@ def JPEG(im):
         result.view(im.shape)
         return result
 
-    # 获取批量大小和图像尺寸
     batch_size,channels,h,w=im.shape
 
-    # 填充图像，使其高度和宽度为8的倍数
     pad_h=(8 - (h % 8)) if h % 8 != 0 else 0
     pad_w=(8 - (w % 8)) if w % 8 != 0 else 0
     im_padded=torch.nn.functional.pad(im,(0,pad_w,0,pad_h))
@@ -252,15 +238,12 @@ def JPEG(im):
 
     idct_blocks=idct_2d(quantized_blocks)/255.0 # 对所有块进行 IDCT，然后投射回0~1
 
-    # 把块恢复成原始的图像形状
     permuted_tensor=idct_blocks.view(batch_size,channels,h//8,w//8,8,8).permute(0,1,2,4,3,5)
     compressed_image=permuted_tensor.contiguous().view(batch_size,channels,h,w)
 
-    # 去掉填充
-    return compressed_image  # 返回原始大小的图像
+    return compressed_image
 
 if __name__ == '__main__':
-    #lr=0.0001
     lr=0.0002
     batch_size=128
 
